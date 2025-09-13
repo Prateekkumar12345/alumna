@@ -70,21 +70,9 @@ class Message(Base):
 
 class CollegeRecommendation(Base):
     __tablename__ = "college_recommendations"
-    
     id = Column(Integer, primary_key=True, index=True)
-    chat_id = Column(String, ForeignKey("chats.id"), nullable=False)
-    name = Column(String, nullable=False)
-    location = Column(String, default="Not specified")
-    match_score = Column(Float, default=0)
-    match_reasons = Column(String, default="Good fit")
-    college_type = Column(String, default="General")
-    admission = Column(String, default="Various entrance exams")
-    highlights = Column(String, default="Quality education")
-    website = Column(String, nullable=True)
-    contact = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    scholarship = Column(String, default="Available")
-    affiliation = Column(String, default="Not specified")
+    chat_id = Column(String, ForeignKey("chats.id"))
+    recommendation_data = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     chat = relationship("Chat", back_populates="recommendations")
