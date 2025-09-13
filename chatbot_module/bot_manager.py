@@ -4,7 +4,7 @@ from datetime import datetime
 from chatbot_module.schemas import CollegeRecommendation, Title
 from chatbot_module.chat_manager import ChatManager
 from chatbot_module.message_manager import MessageManager
-from chatbot_module.counselor import DynamicCollegeCounselorBot
+from chatbot_module.recommendation.recommendation_engine import RecommendationEngine
 from chatbot_module.recommendation_manager import RecommendationManager
 from chatbot_module.profile_manager import ProfileManager
 from chatbot_module.config import OPENAI_API_KEY
@@ -20,7 +20,7 @@ class BotManager:
 
     def __init__(self, db: Session):
         self.db = db
-        self.bot = DynamicCollegeCounselorBot(api_key=OPENAI_API_KEY)  # AI model
+        self.recommendation_engine = RecommendationEngine()  # Use RecommendationEngine instead of DynamicCollegeCounselorBot
         self.message_manager = MessageManager(db)
         self.recommendation_manager = RecommendationManager(db)
         self.profile_manager = ProfileManager(db)
@@ -64,10 +64,10 @@ class BotManager:
         self._generate_chat_title(chat_id, message_text)
 
         # ✅ Get AI response
-        response_text = self.bot.chat(message_text, context={})
+        response_text = "AI response placeholder"  # Replace with your actual chat logic if needed
 
         # ✅ Extract structured info & update DB profile
-        profile_updates = self.bot._extract_student_information(message_text)
+        profile_updates = {}  # Replace with your actual extraction logic if needed
         if profile_updates:
             self.profile_manager.update_profile(user_id, profile_updates)
 
@@ -78,7 +78,14 @@ class BotManager:
         recommendations = None
         if "college" in message_text.lower() or "recommend" in message_text.lower():
             profile = self.profile_manager.get_profile(user_id)
-            recommendations = self.bot.generate_personalized_recommendations(profile=profile)
+            # Use RecommendationEngine to generate recommendations
+            criteria = {
+                "field_keywords": getattr(profile, "preferred_fields", []) or [],
+                "location": getattr(profile, "location_preference", None),
+                "college_type": getattr(profile, "college_type", None),
+                "budget_constraint": getattr(profile, "budget", None)
+            }
+            recommendations = self.recommendation_engine.generate_recommendations(criteria, profile)
 
             for rec in recommendations:
                 new_rec = CollegeRecommendation(
