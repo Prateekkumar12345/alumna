@@ -1,22 +1,25 @@
 from datetime import datetime
 from chatbot_module.models import StudentConversation, DynamicStudentProfile
-from chatbot_module.college_database import _initialize_comprehensive_college_database
 import logging
 import re
-from typing import Dict, Any
+import json
+from typing import Dict, Any, List
+from sqlalchemy import create_engine, text
+import pandas as pd
+from chatbot_module.config import DATABASE_URI
 
 class DynamicCollegeCounselorBot:
-    """Enhanced counselor class for FastAPI integration"""
+    """Enhanced counselor class for FastAPI integration with PostgreSQL database"""
 
     def __init__(self, api_key=None, name="Lauren"):
         self.name = name
-
         self.model = "gpt-4o"
+        
+        self.engine = create_engine(DATABASE_URI)
         
         # Initialize OpenAI client if API key is provided
         if api_key:
             try:
-                logging.info("Openai started")
                 from openai import OpenAI
                 self.client = OpenAI(api_key=api_key)
                 self.use_openai = True
@@ -41,9 +44,235 @@ class DynamicCollegeCounselorBot:
         self.recommendations_provided = False
         self.conversation_history = []
         
-        # Initialize knowledge bases
-        self.college_database = _initialize_comprehensive_college_database()
+        # Initialize career insights (keep existing)
         self.career_insights = self._initialize_career_insights()
+
+
+    def _fetch_colleges_from_database(self) -> List[Dict]:
+        """Fetch all colleges from PostgreSQL database"""
+        try:
+            query = """
+            SELECT
+                College_ID,
+                College_Name,
+                Name,
+                Type,
+                Affiliation,
+                Location,
+                Website,
+                Contact,
+                Email,
+                Courses,
+                Scholarship,
+                Admission_Process
+            FROM college
+            """
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query))
+                colleges = []
+                
+                # Fetch all rows from the result set
+                rows = result.fetchall()
+                
+                for row in rows:
+                    # Access row data by column name or index
+                    # The `_fetch_colleges_from_database` function is trying to access `row.Courses` but the
+                    # provided data `('NSOU-KOL', 'Netaji Subhas Open University', ...)` suggests the columns
+                    # are not being returned as a named tuple or object with attributes.
+                    # It's safer to access by index.
+                    # Based on the query, 'Courses' is the 10th column (index 9).
+                    
+                    # Create a dictionary from the row data for easier access
+                    column_names = [
+                        'College_ID', 'College_Name', 'Name', 'Type', 'Affiliation', 'Location',
+                        'Website', 'Contact', 'Email', 'Courses', 'Scholarship', 'Admission_Process'
+                    ]
+                    row_dict = dict(zip(column_names, row))
+
+                    # Parse JSON courses data
+                    courses_data = []
+                    # Check if 'Courses' key exists and its value is not None
+                    if row_dict.get('Courses'):
+                        try:
+                            # The data `[{'Course_ID': 'UG', ...}]` is already a list of dictionaries.
+                            # It's likely not a JSON string in the database column itself, but an array type.
+                            # The original code's `json.loads` might fail if the data is already a list/dict.
+                            # Let's handle both cases gracefully.
+                            if isinstance(row_dict['Courses'], str):
+                                courses_data = json.loads(row_dict['Courses'])
+                            else:
+                                # Assume it's already a list or other iterable
+                                courses_data = row_dict['Courses']
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logging.error(f"Error decoding courses data for college {row_dict.get('College_ID')}: {e}")
+                            courses_data = []
+                    
+                    # Extract course categories for streams
+                    streams = []
+                    specialties = []
+                    if courses_data:
+                        for course in courses_data:
+                            if isinstance(course, dict):
+                                category = course.get('Category', '')
+                                if category:  # Ensure category is not an empty string
+                                    # The original code adds the same category to both streams and specialties.
+                                    # This might be the intended behavior.
+                                    if category not in streams:
+                                        streams.append(category)
+                                        specialties.append(category)
+                    
+                    # Map database fields to expected format using the dictionary
+                    college_data = {
+                        "id": row_dict.get('College_ID'),
+                        "name": row_dict.get('College_Name') or row_dict.get('Name'),
+                        "location": row_dict.get('Location') or "Not specified",
+                        "type": row_dict.get('Type') or "General",
+                        "affiliation": row_dict.get('Affiliation') or "Not specified",
+                        "website": row_dict.get('Website'),
+                        "contact": row_dict.get('Contact'),
+                        "email": row_dict.get('Email'),
+                        "courses": courses_data,
+                        "streams": streams,
+                        "specialties": specialties,
+                        "admission": row_dict.get('Admission_Process') or "Various entrance exams",
+                        "scholarship": row_dict.get('Scholarship') or "Available",
+                        # Extract fees from courses data
+                        "fees": self._extract_fees_from_courses(courses_data),
+                        # Generate highlights based on available data
+                        "highlights": self._generate_highlights(row_dict)
+                    }
+                    colleges.append(college_data)
+                
+                return colleges
+                
+        except Exception as e:
+            logging.error(f"Error fetching colleges from database: {e}")
+            return []
+        
+    def _extract_fees_from_courses(self, courses_data) -> int:
+        """Extract average fees from courses data"""
+        if not courses_data:
+            return 0
+        
+        total_fees = 0
+        valid_courses = 0
+        
+        for course in courses_data:
+            if isinstance(course, dict) and 'Fees' in course:
+                fees_str = str(course['Fees']).lower()
+                # Extract numeric values from fees string
+                import re
+                numbers = re.findall(r'\d+', fees_str)
+                if numbers:
+                    # Convert to integer, assume it's in appropriate units
+                    fee_amount = int(numbers[0])
+                    # If fee seems too small, multiply by 1000 (assuming it's in thousands)
+                    if fee_amount < 1000:
+                        fee_amount *= 1000
+                    total_fees += fee_amount
+                    valid_courses += 1
+        
+        return int(total_fees / valid_courses) if valid_courses > 0 else 0
+
+    def _generate_highlights(self, row) -> List[str]:
+        """Generate highlights based on available college data"""
+        highlights = []
+
+        # use dict.get() instead of attribute access
+        affiliation = row.get('Affiliation')
+        ctype = row.get('Type')
+        scholarship = row.get('Scholarship')
+        website = row.get('Website')
+        contact = row.get('Contact')
+
+        if affiliation and "university" in affiliation.lower():
+            highlights.append("University affiliated")
+
+        if ctype:
+            highlights.append(f"{ctype} institution")
+
+        if scholarship and scholarship.lower() != "n/a":
+            highlights.append("Scholarship available")
+
+        if website:
+            highlights.append("Online presence")
+
+        if contact:
+            highlights.append("Direct contact available")
+
+        if not highlights:
+            highlights = ["Quality education", "Good infrastructure", "Experienced faculty"]
+
+        return highlights[:4]
+
+    def _search_colleges_by_criteria(self, field_keywords=None, location=None, college_type=None) -> List[Dict]:
+        """Search colleges based on specific criteria"""
+        try:
+            query = "SELECT * FROM college WHERE 1=1"
+            params = {}
+            logging.info(f"Location: {location}, College Type: {college_type}, Field Keywords: {field_keywords}")
+            
+            if field_keywords:
+                # Search in courses JSON and college type
+                query += " AND (LOWER(courses::text) LIKE :field_keyword OR LOWER(type) LIKE :field_keyword)"
+                # Use first keyword for search
+                keyword = field_keywords[0].lower()
+                params['field_keyword'] = f'%{keyword}%'
+            
+            if location:
+                query += " AND LOWER(location) LIKE :location"
+                params['location'] = f'%{location.lower()}%'
+            
+            if college_type:
+                query += " AND LOWER(type) LIKE :college_type"
+                params['college_type'] = f'%{college_type.lower()}%'
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params)
+                colleges = []
+                
+                for row in result:
+                    # Parse and format similar to _fetch_colleges_from_database
+                    courses_data = []
+                    if row.Courses:
+                        try:
+                            courses_data = json.loads(row.Courses) if isinstance(row.Courses, str) else row.Courses
+                        except (json.JSONDecodeError, TypeError):
+                            courses_data = []
+                    
+                    streams = []
+                    if courses_data:
+                        for course in courses_data:
+                            if isinstance(course, dict):
+                                category = course.get('Category', '')
+                                if category and category not in streams:
+                                    streams.append(category)
+                    
+                    college_data = {
+                        "id": row.College_ID,
+                        "name": row.College_Name or row.Name,
+                        "location": row.Location or "Not specified",
+                        "type": row.Type or "General",
+                        "affiliation": row.Affiliation or "Not specified",
+                        "website": row.Website,
+                        "contact": row.Contact,
+                        "email": row.Email,
+                        "courses": courses_data,
+                        "streams": streams,
+                        "specialties": streams,
+                        "admission": row.Admission_Process or "Various entrance exams",
+                        "scholarship": row.Scholarship or "Available",
+                        "fees": self._extract_fees_from_courses(courses_data),
+                        "highlights": self._generate_highlights(row)
+                    }
+                    colleges.append(college_data)
+                
+                return colleges
+                
+        except Exception as e:
+            logging.error(f"Error searching colleges: {e}")
+            return []
 
     def _initialize_career_insights(self):
         """Initialize career insights database"""
@@ -121,12 +350,8 @@ class DynamicCollegeCounselorBot:
         elif self.message_count > 5:
             self.conversation_stage = "detailed_guidance"
 
-
-
-
     def _extract_student_information(self, user_message: str) -> Dict[str, Any]:
         """Extract and update student information from conversation"""
-        logging.info(f"Extracting info from message: {user_message}")
         message_lower = user_message.lower()
         updates: Dict[str, Any] = {}
 
@@ -145,9 +370,7 @@ class DynamicCollegeCounselorBot:
 
         # === Academic Performance / Scores ===
         marks_match = re.search(r"(\d{1,3})\s*%|percent", message_lower)
-        logging.info(f" marks_match: {marks_match}")
         if marks_match:
-            logging.info(f"Marks match found: {marks_match}")
             percent = float(marks_match.group(1))
             self.student_profile.academic_performance["overall"] = percent
             self.student_profile.scores["percentage"] = percent
@@ -182,7 +405,7 @@ class DynamicCollegeCounselorBot:
                 updates["preferred_fields"] = self.student_profile.preferred_fields
 
         # === Location Preference ===
-        for city in ["delhi", "mumbai", "bangalore", "pune", "hyderabad", "chennai", "kolkata"]:
+        for city in ["delhi", "mumbai", "bangalore", "pune", "hyderabad", "chennai", "kolkata", "indore"]:
             if city in message_lower:
                 self.student_profile.location_preference = city.title()
                 updates["location_preference"] = city.title()
@@ -236,9 +459,7 @@ class DynamicCollegeCounselorBot:
         if self.student_profile.preferred_fields and self.student_profile.scores:
             self.sufficient_info_collected = True
         
-        logging.info(f"Extracted student info updates: {updates}")
         return updates
-
 
     def chat(self, message, context):
         """Main chat function with OpenAI integration"""
@@ -246,7 +467,6 @@ class DynamicCollegeCounselorBot:
         
         # Update conversation stage and extract information
         self._update_conversation_stage(message)
-        logging.info(f"message:{message}")
         self._extract_student_information(message)
         
         # Add to extraction history
@@ -373,30 +593,35 @@ Based on your responses, I can provide personalized recommendations. What would 
 Based on our conversation so far, I can see you're exploring your options thoughtfully. Here are some areas we could discuss further:
 
 📚 **Academic Paths**: Engineering, Medical, Business, Liberal Arts, Sciences
-🌍 **Study Locations**: India vs International options  
+🌎 **Study Locations**: India vs International options  
 💼 **Career Prospects**: Emerging fields vs Traditional stable careers
 💰 **Financial Planning**: Education costs, scholarships, loans
 
 What specific aspect would you like to dive deeper into? I'm here to provide detailed insights to help you make informed decisions!"""
 
     def generate_personalized_recommendations(self, profile=None):
-        """Generate recommendations based on student profile (budget removed from scoring)"""
+        """Generate recommendations based on student profile using database"""
         recommendations = []
         
-        # ✅ Use persisted DB profile if provided
+        # Use persisted DB profile if provided
         if not profile:
-            profile = self.student_profile  # fallback
+            profile = self.student_profile
 
         preferred_fields = getattr(profile, "preferred_fields", []) or []
         location_preference = getattr(profile, "location_preference", None)
-        # Removed budget parameter - budget = getattr(profile, "budget", None)
 
-        # Get all colleges from database
-        all_colleges = []
-        for category in self.college_database.values():
-            all_colleges.extend(category)
-        
-        # Filter and score colleges based on student preferences (without budget)
+        # Fetch colleges from database based on preferences
+        if preferred_fields:
+            # Search for colleges that match preferred fields
+            all_colleges = self._search_colleges_by_criteria(
+                field_keywords=preferred_fields,
+                location=location_preference
+            )
+        else:
+            # Get all colleges if no specific field preference
+            all_colleges = self._fetch_colleges_from_database()
+
+        # Filter and score colleges based on student preferences
         for college in all_colleges:
             score = 0
             reasons = []
@@ -404,40 +629,67 @@ What specific aspect would you like to dive deeper into? I'm here to provide det
             # Check field alignment
             if preferred_fields:
                 college_streams = college.get('streams', [])
-                field_match = any(
-                    any(pref.lower() in stream.lower() for stream in college_streams)
-                    for pref in preferred_fields
-                )
+                college_courses = college.get('courses', [])
+                
+                field_match = False
+                # Check streams
+                if college_streams:
+                    field_match = any(
+                        any(pref.lower() in stream.lower() for stream in college_streams)
+                        for pref in preferred_fields
+                    )
+                
+                # Also check in courses data
+                if not field_match and college_courses:
+                    for course in college_courses:
+                        if isinstance(course, dict):
+                            course_category = course.get('Category', '').lower()
+                            if any(pref.lower() in course_category for pref in preferred_fields):
+                                field_match = True
+                                break
+                
                 if field_match:
-                    score += 50  # Increased weight since budget is removed
+                    score += 50
                     reasons.append(f"Offers programs in {', '.join(preferred_fields)}")
-            
-            # Budget consideration removed completely
-            # No budget-based scoring or filtering
             
             # Location preference
             if location_preference:
                 if location_preference.lower() in college.get('location', '').lower():
-                    score += 25  # Increased weight since budget is removed
+                    score += 25
                     reasons.append("Preferred location")
             
-            # Add base score for quality (based on highlights)
-            score += len(college.get('highlights', [])) * 3  # Increased weight
+            # Quality indicators
+            if college.get('affiliation'):
+                score += 10
+                
+            if college.get('scholarship') and college.get('scholarship').lower() != "n/a":
+                score += 15
+                reasons.append("Scholarships available")
+                
+            if college.get('website'):
+                score += 5
+                
+            # Add base score for having complete information
+            score += len(college.get('highlights', [])) * 3
             
-            if score > 15:  # Adjusted threshold since budget scoring is removed
+            if score > 15:  # Minimum threshold
                 recommendations.append({
                     "name": college['name'],
                     "location": college['location'],
-                    "fees": college.get('fees', 0),  # Still display fees for information
+                    "fees": college.get('fees', 0),
                     "match_score": min(score, 100.0),
                     "match_reasons": reasons or ["Good overall fit based on your profile"],
                     "type": college.get('type', 'General'),
                     "admission": college.get('admission', 'Various entrance exams'),
-                    "highlights": college.get('highlights', [])[:3]  # Top 3 highlights
+                    "highlights": college.get('highlights', [])[:3],
+                    "website": college.get('website'),
+                    "contact": college.get('contact'),
+                    "email": college.get('email'),
+                    "scholarship": college.get('scholarship'),
+                    "affiliation": college.get('affiliation')
                 })
         
         # Sort by match score and return top recommendations
         recommendations.sort(key=lambda x: x['match_score'], reverse=True)
         
-       
         return recommendations[:10] if recommendations else []
