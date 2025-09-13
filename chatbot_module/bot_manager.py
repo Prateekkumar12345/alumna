@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
+import re
 
 from chatbot_module.schemas import CollegeRecommendation, Title
 from chatbot_module.chat_manager import ChatManager
@@ -34,12 +35,17 @@ class BotManager:
 
         # 🔥 Use OpenAI to generate title
         try:
-            response = client.responses.create(
-                model="gpt-3.5-turbo",  # Changed from "gpt-5" which doesn't exist
-                input=f"Generate a very short title (max 5 words) summarizing this conversation topic:\n\n{first_message}"
+            # Use chat completions instead of responses.create
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Generate a very short title (max 5 words) summarizing the conversation topic."},
+                    {"role": "user", "content": first_message}
+                ],
+                max_tokens=15
             )
-            title_text = response.output_text.strip()
-            logging.info(f"Title : {title_text}")
+            title_text = response.choices[0].message.content.strip().strip('"')
+            logging.info(f"Title: {title_text}")
 
             # ✅ Save into DB
             new_title = Title(chat_id=chat_id, title=title_text, created_at=datetime.utcnow())
@@ -50,8 +56,12 @@ class BotManager:
             return new_title.title
         except Exception as e:
             logging.error(f"Error generating chat title: {e}")
-            # Fallback title
-            fallback_title = "College Counseling Chat"
+            # Fallback title based on message content
+            if "hello" in first_message.lower() or "hi" in first_message.lower():
+                fallback_title = "Greeting"
+            else:
+                fallback_title = "College Counseling"
+                
             new_title = Title(chat_id=chat_id, title=fallback_title, created_at=datetime.utcnow())
             self.db.add(new_title)
             self.db.commit()
@@ -62,18 +72,25 @@ class BotManager:
         message_lower = message_text.lower()
         response_lower = response_text.lower()
         
-        # Check if user is asking for recommendations
-        if any(keyword in message_lower for keyword in [
+        # Check if user is explicitly asking for recommendations
+        recommendation_keywords = [
             "recommend", "suggest", "college", "university", "institute", 
-            "where should i study", "which college", "admission", "apply"
-        ]):
-            return True
+            "where should i study", "which college", "admission", "apply",
+            "computer science", "engineering", "medical", "mba", "degree",
+            "course", "program", "study", "education", "options", "choices"
+        ]
         
+        # Don't generate recommendations for simple greetings
+        greeting_keywords = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+        
+        if any(keyword in message_lower for keyword in greeting_keywords):
+            return False
+            
         # Check if bot response contains recommendations
-        if "recommendation" in response_lower or "college" in response_lower:
+        if any(keyword in response_lower for keyword in ["recommendation", "college", "university", "institute", "🎓", "📍"]):
             return True
             
-        return False
+        return any(keyword in message_lower for keyword in recommendation_keywords)
 
     def _store_recommendations(self, chat_id: str, recommendations: list):
         """Store recommendations in the database"""
@@ -83,32 +100,42 @@ class BotManager:
         # Clear existing recommendations first
         self.recommendation_manager.clear_recommendations(chat_id)
         
-        # Store new recommendations
+        # Store new recommendations - only if they have valid data
+        valid_recommendations = []
         for rec in recommendations:
-            if rec and isinstance(rec, dict) and rec.get('name'):
-                # Convert lists to strings for database storage
-                match_reasons = ', '.join(rec.get('match_reasons', [])) if rec.get('match_reasons') else 'Good fit'
-                highlights = ', '.join(rec.get('highlights', [])) if rec.get('highlights') else 'Quality education'
-                
-                # Create recommendation object
-                new_rec = CollegeRecommendation(
-                    chat_id=chat_id,
-                    name=rec.get('name', 'Unknown College'),
-                    location=rec.get('location', 'Not specified'),
-                    fees=rec.get('fees', 0),
-                    match_score=rec.get('match_score', 0),
-                    match_reasons=match_reasons,
-                    college_type=rec.get('type', 'General'),
-                    admission=rec.get('admission', 'Various entrance exams'),
-                    highlights=highlights,
-                    website=rec.get('website', ''),
-                    contact=rec.get('contact', ''),
-                    email=rec.get('email', ''),
-                    scholarship=rec.get('scholarship', 'Available'),
-                    affiliation=rec.get('affiliation', 'Not specified'),
-                    created_at=datetime.utcnow()
-                )
-                self.db.add(new_rec)
+            if (isinstance(rec, dict) and rec.get('name') and 
+                rec['name'] != 'Unknown College' and rec['name'] is not None):
+                valid_recommendations.append(rec)
+        
+        if not valid_recommendations:
+            logging.warning("No valid recommendations to store")
+            return
+            
+        for rec in valid_recommendations:
+            # Convert lists to strings for database storage
+            match_reasons = ', '.join(rec.get('match_reasons', [])) if rec.get('match_reasons') else 'Good fit'
+            highlights = ', '.join(rec.get('highlights', [])) if rec.get('highlights') else 'Quality education'
+            
+            # Create recommendation object
+            new_rec = CollegeRecommendation(
+                chat_id=chat_id,
+                name=rec.get('name', 'Unknown College'),
+                location=rec.get('location', 'Not specified'),
+                match_score=rec.get('match_score', 0),
+                match_reasons=match_reasons,
+                college_type=rec.get('type', 'General'),
+                admission=rec.get('admission', 'Various entrance exams'),
+                highlights=highlights,
+                website=rec.get('website', ''),
+                contact=rec.get('contact', ''),
+                email=rec.get('email', ''),
+                scholarship=rec.get('scholarship', 'Available'),
+                affiliation=rec.get('affiliation', 'Not specified'),
+                created_at=datetime.utcnow()
+            )
+            self.db.add(new_rec)
+        
+        self.db.commit()
 
     def _format_recommendations_for_response(self, recommendations: list) -> list:
         """Format recommendations for API response"""
@@ -117,12 +144,10 @@ class BotManager:
             
         formatted_recs = []
         for rec in recommendations:
-            if isinstance(rec, CollegeRecommendation):
-                # Convert database object to dict
+            if hasattr(rec, 'name'):  # Database object
                 formatted_recs.append({
                     "name": rec.name,
                     "location": rec.location,
-                    "fees": rec.fees,
                     "match_score": rec.match_score,
                     "match_reasons": rec.match_reasons.split(', ') if rec.match_reasons else [],
                     "type": rec.college_type,
@@ -134,12 +159,10 @@ class BotManager:
                     "scholarship": rec.scholarship,
                     "affiliation": rec.affiliation
                 })
-            elif isinstance(rec, dict):
-                # Already a dict, just ensure proper formatting
+            elif isinstance(rec, dict):  # Direct dict from bot
                 formatted_recs.append({
                     "name": rec.get('name'),
                     "location": rec.get('location', 'Not specified'),
-                    "fees": rec.get('fees', 0),
                     "match_score": rec.get('match_score', 0),
                     "match_reasons": rec.get('match_reasons', []),
                     "type": rec.get('type', 'General'),
