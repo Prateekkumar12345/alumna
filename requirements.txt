@@ -24,3 +24,4 @@ tqdm
 typing-inspection
 typing_extensions
 uvicorn
+pandas
