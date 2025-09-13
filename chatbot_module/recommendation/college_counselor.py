@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import re
 from typing import Dict, Any, List
 from openai import OpenAI
 
@@ -22,20 +23,18 @@ class DynamicCollegeCounselorBot:
         self.recommendation_engine = RecommendationEngine()
         
         # Initialize OpenAI client if API key is provided
+        self.use_openai = False
         if api_key:
             try:
                 self.client = OpenAI(api_key=api_key)
                 self.use_openai = True
-                print("✅ OpenAI client initialized successfully")
+                logging.info("✅ OpenAI client initialized successfully")
             except ImportError:
-                print("⚠️  OpenAI library not installed, using mock responses")
-                self.use_openai = False
+                logging.warning("⚠️  OpenAI library not installed, using mock responses")
             except Exception as e:
-                print(f"⚠️  OpenAI initialization failed: {e}, using mock responses")
-                self.use_openai = False
+                logging.warning(f"⚠️  OpenAI initialization failed: {e}, using mock responses")
         else:
-            self.use_openai = False
-            print("⚠️  No API key provided, using mock responses")
+            logging.warning("⚠️  No API key provided, using mock responses")
         
         # Initialize conversation tracking
         self.conversation = StudentConversation()
@@ -285,6 +284,20 @@ class DynamicCollegeCounselorBot:
                 
                 return recommendations_text
         
+        # Generate response using OpenAI or fallback
+        assistant_response = self._generate_response(message)
+        
+        # Add assistant response to history
+        self.conversation_history.append({
+            "role": "assistant",
+            "content": assistant_response,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        return assistant_response
+
+    def _generate_response(self, message):
+        """Generate response using OpenAI API or fallback"""
         if self.use_openai:
             try:
                 # Prepare messages for OpenAI
@@ -311,22 +324,13 @@ class DynamicCollegeCounselorBot:
                     presence_penalty=0.2
                 )
                 
-                assistant_response = response.choices[0].message.content
+                return response.choices[0].message.content
                 
             except Exception as e:
-                print(f"OpenAI API error: {e}")
-                assistant_response = self._get_fallback_response(message)
+                logging.error(f"OpenAI API error: {e}")
+                return self._get_fallback_response(message)
         else:
-            assistant_response = self._get_fallback_response(message)
-        
-        # Add assistant response to history
-        self.conversation_history.append({
-            "role": "assistant",
-            "content": assistant_response,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return assistant_response
+            return self._get_fallback_response(message)
 
     def _format_recommendations(self, recommendations: List[Dict]) -> str:
         """Format college recommendations into a readable response"""
@@ -358,9 +362,76 @@ class DynamicCollegeCounselorBot:
 
     def _get_fallback_response(self, message):
         """Provide intelligent fallback responses when OpenAI is not available"""
-        # ... (same as original implementation)
-        # This method remains unchanged from your original code
-        pass
+        message_lower = message.lower()
+        
+        if self.message_count == 1:
+            return f"Hello! I'm {self.name}, your AI college counselor. I'm here to help you navigate your educational journey and find the best college options for your goals. Could you tell me a bit about yourself - what are you currently studying and what fields interest you most?"
+        
+        # Handle specific queries
+        if any(word in message_lower for word in ["engineering", "iit", "jee", "computer science"]):
+            return """Great choice! Engineering offers excellent career prospects. Some top options include:
+
+🏆 **IITs** - Premier institutes with world-class education (Admission: JEE Advanced)
+🎯 **NITs** - Excellent government institutes across India (Admission: JEE Main)  
+⭐ **BITS Pilani** - Top private institute with industry focus (Admission: BITSAT)
+🏫 **State colleges** - Good quality education at affordable fees
+
+Computer Science is particularly hot right now with amazing placement opportunities. What's your current academic background? Are you preparing for JEE or any other entrance exams?"""
+
+        elif any(word in message_lower for word in ["medical", "doctor", "neet", "mbbs"]):
+            return """Medicine is a noble and rewarding career path! Here's what you should know:
+
+🏥 **AIIMS** - Premier medical institutes with highly subsidized fees
+🎓 **Government Medical Colleges** - Affordable with excellent clinical exposure
+🏫 **Private Medical Colleges** - Good infrastructure but higher fees (₹50L - ₹1.5Cr)
+
+Key points:
+- NEET is mandatory for all medical admissions
+- Start preparation early - very competitive field
+- Consider specialization options after MBBS
+- Alternative paths: BDS, AYUSH, Allied Health Sciences
+
+What's your current academic performance? Have you started NEET preparation?"""
+
+        elif any(word in message_lower for word in ["mba", "management", "business", "cat"]):
+            return """Business education opens doors to diverse career opportunities!
+
+🎯 **IIMs** - Top business schools with excellent ROI (Admission: CAT)
+⭐ **ISB, XLRI, FMS** - Premier institutes with strong placements  
+📈 **Sectoral MBAs** - Healthcare, Rural, Family Business specializations
+
+Career paths:
+- Management Consulting (₹15-40L starting)
+- Investment Banking & Finance  
+- Product Management in Tech
+- General Management roles
+
+Most MBA programs prefer 2-3 years work experience. Are you currently working or planning to work before MBA? What business areas interest you most?"""
+
+        elif any(word in message_lower for word in ["confused", "help", "don't know", "unsure"]):
+            return """It's completely normal to feel confused about career choices! Let's explore your options systematically.
+
+Let me ask you a few questions to better understand your interests:
+
+🤔 **Academic Performance**: How are your current grades? Which subjects do you enjoy most?
+🎯 **Interests**: What activities make you lose track of time? 
+💡 **Career Vision**: Where do you see yourself in 10 years?
+💰 **Practical Considerations**: Any budget constraints or location preferences?
+👨‍👩‍👧‍👦 **Family Input**: What does your family suggest?
+
+Based on your responses, I can provide personalized recommendations. What would you like to share first?"""
+
+        else:
+            return """Thank you for sharing that! I'm learning about your preferences and goals.
+
+Based on our conversation so far, I can see you're exploring your options thoughtfully. Here are some areas we could discuss further:
+
+📚 **Academic Paths**: Engineering, Medical, Business, Liberal Arts, Sciences
+🌎 **Study Locations**: India vs International options  
+💼 **Career Prospects**: Emerging fields vs Traditional stable careers
+💰 **Financial Planning**: Education costs, scholarships, loans
+
+What specific aspect would you like to dive deeper into? I'm here to provide detailed insights to help you make informed decisions!"""
 
     def generate_personalized_recommendations(self, profile=None):
         """Generate recommendations based on student profile using database"""
