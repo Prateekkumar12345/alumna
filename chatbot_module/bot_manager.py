@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
-import logging
 
 from chatbot_module.schemas import CollegeRecommendation, Title
 from chatbot_module.chat_manager import ChatManager
@@ -10,6 +9,7 @@ from chatbot_module.recommendation_manager import RecommendationManager
 from chatbot_module.profile_manager import ProfileManager
 from chatbot_module.config import OPENAI_API_KEY
 from openai import OpenAI
+import logging
 
 # -------------------- OpenAI Client --------------------
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -47,36 +47,6 @@ class BotManager:
 
         return new_title.title
 
-    def _should_generate_recommendations(self, message_text: str, conversation_context: dict) -> bool:
-        """Determine if recommendations should be generated based on context"""
-        message_lower = message_text.lower()
-        
-        # Explicit recommendation requests
-        if any(keyword in message_lower for keyword in ["recommend", "suggest", "college", "university", "institute"]):
-            return True
-        
-        # Context-based triggers
-        if conversation_context.get("conversation_stage") == "recommendation":
-            return True
-            
-        if conversation_context.get("sufficient_info_collected", False):
-            # Check if user is asking about options/choices
-            if any(phrase in message_lower for phrase in [
-                "what should i", "which one", "options", "choices", 
-                "what are", "tell me about", "looking for", "need help"
-            ]):
-                return True
-        
-        # Check if user is discussing academic/career choices
-        academic_keywords = ["study", "course", "degree", "program", "career", "future", "education"]
-        if any(keyword in message_lower for keyword in academic_keywords):
-            # If we have enough profile info, provide recommendations
-            profile = self.profile_manager.get_profile(conversation_context.get("user_id", ""))
-            if profile and (getattr(profile, "preferred_fields", []) or getattr(profile, "scores", {})):
-                return True
-        
-        return False
-
     def process_message(self, user_id: str, chat_id: str, message_text: str):
         # ✅ Validate chat exists
         chat_manager = ChatManager(self.db)
@@ -104,16 +74,9 @@ class BotManager:
         # ✅ Store bot response
         self.message_manager.store_message(chat_id, "assistant", response_text)
 
-        # ✅ Context-aware recommendations
+        # ✅ Handle recommendations
         recommendations = None
-        conversation_context = {
-            "user_id": user_id,
-            "conversation_stage": self.bot.conversation_stage,
-            "sufficient_info_collected": self.bot.sufficient_info_collected,
-            "message_count": self.bot.message_count
-        }
-        
-        if self._should_generate_recommendations(message_text, conversation_context):
+        if "college" in message_text.lower() or "recommend" in message_text.lower():
             profile = self.profile_manager.get_profile(user_id)
             recommendations = self.bot.generate_personalized_recommendations(profile=profile)
 

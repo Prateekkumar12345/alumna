@@ -47,6 +47,7 @@ class DynamicCollegeCounselorBot:
         # Initialize career insights (keep existing)
         self.career_insights = self._initialize_career_insights()
 
+
     def _fetch_colleges_from_database(self) -> List[Dict]:
         """Fetch all colleges from PostgreSQL database"""
         try:
@@ -75,6 +76,13 @@ class DynamicCollegeCounselorBot:
                 rows = result.fetchall()
                 
                 for row in rows:
+                    # Access row data by column name or index
+                    # The `_fetch_colleges_from_database` function is trying to access `row.Courses` but the
+                    # provided data `('NSOU-KOL', 'Netaji Subhas Open University', ...)` suggests the columns
+                    # are not being returned as a named tuple or object with attributes.
+                    # It's safer to access by index.
+                    # Based on the query, 'Courses' is the 10th column (index 9).
+                    
                     # Create a dictionary from the row data for easier access
                     column_names = [
                         'College_ID', 'College_Name', 'Name', 'Type', 'Affiliation', 'Location',
@@ -87,7 +95,10 @@ class DynamicCollegeCounselorBot:
                     # Check if 'Courses' key exists and its value is not None
                     if row_dict.get('Courses'):
                         try:
-                            # Handle both JSON string and already parsed data
+                            # The data `[{'Course_ID': 'UG', ...}]` is already a list of dictionaries.
+                            # It's likely not a JSON string in the database column itself, but an array type.
+                            # The original code's `json.loads` might fail if the data is already a list/dict.
+                            # Let's handle both cases gracefully.
                             if isinstance(row_dict['Courses'], str):
                                 courses_data = json.loads(row_dict['Courses'])
                             else:
@@ -105,6 +116,8 @@ class DynamicCollegeCounselorBot:
                             if isinstance(course, dict):
                                 category = course.get('Category', '')
                                 if category:  # Ensure category is not an empty string
+                                    # The original code adds the same category to both streams and specialties.
+                                    # This might be the intended behavior.
                                     if category not in streams:
                                         streams.append(category)
                                         specialties.append(category)
@@ -302,53 +315,6 @@ class DynamicCollegeCounselorBot:
             }
         }
 
-    def _analyze_conversation_context(self, user_message: str) -> Dict[str, Any]:
-        """Analyze conversation context to determine if recommendations are appropriate"""
-        message_lower = user_message.lower()
-        context_analysis = {
-            "should_recommend": False,
-            "recommendation_type": None,
-            "confidence": 0.0
-        }
-        
-        # Direct requests for recommendations
-        direct_triggers = ["recommend", "suggest", "college", "university", "institute"]
-        if any(trigger in message_lower for trigger in direct_triggers):
-            context_analysis["should_recommend"] = True
-            context_analysis["confidence"] = 0.9
-            context_analysis["recommendation_type"] = "direct_request"
-            return context_analysis
-        
-        # Contextual triggers based on conversation stage
-        if self.conversation_stage in ["recommendation", "detailed_guidance"]:
-            # Questions about options/choices
-            option_questions = ["what should i", "which one", "options", "choices", "what are"]
-            if any(question in message_lower for question in option_questions):
-                context_analysis["should_recommend"] = True
-                context_analysis["confidence"] = 0.8
-                context_analysis["recommendation_type"] = "option_inquiry"
-                return context_analysis
-        
-        # Academic/career discussions with sufficient profile info
-        academic_keywords = ["study", "course", "degree", "program", "career", "future"]
-        if any(keyword in message_lower for keyword in academic_keywords):
-            if self.sufficient_info_collected:
-                context_analysis["should_recommend"] = True
-                context_analysis["confidence"] = 0.7
-                context_analysis["recommendation_type"] = "academic_discussion"
-                return context_analysis
-        
-        # User expressing confusion or need for guidance
-        confusion_phrases = ["confused", "don't know", "unsure", "help me", "need guidance"]
-        if any(phrase in message_lower for phrase in confusion_phrases):
-            if self.message_count > 3:  # After some conversation
-                context_analysis["should_recommend"] = True
-                context_analysis["confidence"] = 0.6
-                context_analysis["recommendation_type"] = "guidance_needed"
-                return context_analysis
-        
-        return context_analysis
-
     def _get_dynamic_system_prompt(self):
         """Generate dynamic system prompt based on conversation stage"""
         base_personality = f"""
@@ -362,16 +328,11 @@ class DynamicCollegeCounselorBot:
         - Provides specific, actionable advice rather than generic responses
         - Shares relevant insights and stories to help students understand options
         - Balances dreams with practical realities
-        - Proactively provides college recommendations when appropriate based on context
 
         Current conversation stage: {self.conversation_stage}
         Messages exchanged: {self.message_count}
-        Sufficient info collected: {self.sufficient_info_collected}
         
         Based on the conversation, provide helpful, informative responses that guide the student toward making informed decisions about their education and career.
-        
-        When appropriate (based on conversation context and available student information), 
-        proactively provide college recommendations without waiting for explicit requests.
         """
         
         return base_personality
@@ -508,14 +469,10 @@ class DynamicCollegeCounselorBot:
         self._update_conversation_stage(message)
         self._extract_student_information(message)
         
-        # Analyze conversation context for recommendations
-        context_analysis = self._analyze_conversation_context(message)
-        
         # Add to extraction history
         self.extraction_history.append({
             "message": message,
             "stage": self.conversation_stage,
-            "context_analysis": context_analysis,
             "timestamp": datetime.now().isoformat()
         })
         
