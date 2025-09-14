@@ -78,7 +78,6 @@ class BotManager:
         return False
 
     def process_message(self, user_id: str, chat_id: str, message_text: str):
-        # ✅ Validate chat exists
         chat_manager = ChatManager(self.db)
         chat = chat_manager.get_chat(chat_id)
         if not chat or chat.user_id != user_id:
@@ -93,16 +92,10 @@ class BotManager:
         # ✅ Generate title if missing
         self._generate_chat_title(chat_id, message_text)
 
-        # ✅ Get AI response
-        response_text = self.bot.chat(message_text, context={})
-
         # ✅ Extract structured info & update DB profile
         profile_updates = self.bot._extract_student_information(message_text)
         if profile_updates:
             self.profile_manager.update_profile(user_id, profile_updates)
-
-        # ✅ Store bot response
-        self.message_manager.store_message(chat_id, "assistant", response_text)
 
         # ✅ Context-aware recommendations
         recommendations = None
@@ -112,12 +105,12 @@ class BotManager:
             "sufficient_info_collected": self.bot.sufficient_info_collected,
             "message_count": self.bot.message_count
         }
-        
+
         if self._should_generate_recommendations(message_text, conversation_context):
             profile = self.profile_manager.get_profile(user_id)
             recommendations = self.bot.generate_personalized_recommendations(profile=profile)
 
-            for rec in recommendations:
+            for rec in (recommendations or []):
                 new_rec = ChatRecord(
                     chat_id=chat_id,
                     recommendation_data=rec,
@@ -127,6 +120,27 @@ class BotManager:
                 )
                 self.db.add(new_rec)
 
+        # ✅ If no recommendations → inject profile into bot prompt
+        if not recommendations:
+            profile = self.profile_manager.get_profile(user_id)
+            if profile:
+                profile_context = (
+                    f"\n\n[Student Profile]\n"
+                    f"- Preferred fields: {getattr(profile, 'preferred_fields', [])}\n"
+                    f"- Scores: {getattr(profile, 'scores', {})}\n"
+                    f"- Goals: {getattr(profile, 'goals', '')}\n"
+                    f"- Location preference: {getattr(profile, 'location_preference', '')}\n"
+                )
+                # Append profile context to user message
+                bot_input = message_text + profile_context
+            else:
+                bot_input = message_text
+        else:
+            bot_input = message_text
+
+        # ✅ Generate bot response (with profile if needed)
+        response_text = self.bot.chat(bot_input, context={})
+        self.message_manager.store_message(chat_id, "assistant", response_text)
 
         # ✅ Commit DB changes
         self.db.commit()
