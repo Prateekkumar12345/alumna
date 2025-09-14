@@ -4,7 +4,7 @@ from datetime import datetime
 from chatbot_module.schemas import CollegeRecommendation, Title
 from chatbot_module.chat_manager import ChatManager
 from chatbot_module.message_manager import MessageManager
-from chatbot_module.recommendation.college_counselor import DynamicCollegeCounselorBot
+from chatbot_module.counselor import DynamicCollegeCounselorBot
 from chatbot_module.recommendation_manager import RecommendationManager
 from chatbot_module.profile_manager import ProfileManager
 from chatbot_module.config import OPENAI_API_KEY
