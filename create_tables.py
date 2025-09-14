@@ -27,6 +27,7 @@ def get_db():
     finally:
         db.close()
 
+
 # -------------------- ORM Models --------------------
 class User(Base):
     __tablename__ = "users"
@@ -45,8 +46,7 @@ class Chat(Base):
     status = Column(String, default="active")
 
     user = relationship("User", back_populates="chats")
-    messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan")
-    recommendations = relationship("CollegeRecommendation", back_populates="chat", cascade="all, delete-orphan")
+    records = relationship("ChatRecord", back_populates="chat", cascade="all, delete-orphan")
     title = relationship("Title", back_populates="chat", uselist=False, cascade="all, delete-orphan")  # ✅ One-to-one
 
 class Title(Base):
@@ -57,25 +57,6 @@ class Title(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     chat = relationship("Chat", back_populates="title")
-
-class Message(Base):
-    __tablename__ = "messages"
-    id = Column(Integer, primary_key=True, index=True)
-    chat_id = Column(String, ForeignKey("chats.id"))
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    role = Column(String)  # 'user' or 'assistant'
-    content = Column(Text)
-
-    chat = relationship("Chat", back_populates="messages")
-
-class CollegeRecommendation(Base):
-    __tablename__ = "college_recommendations"
-    id = Column(Integer, primary_key=True, index=True)
-    chat_id = Column(String, ForeignKey("chats.id"))
-    recommendation_data = Column(JSON)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    chat = relationship("Chat", back_populates="recommendations")
 
 class APILog(Base):
     __tablename__ = "api_logs"
@@ -97,11 +78,32 @@ class StudentProfile(Base):
     degree_preference = Column(String, nullable=True)
     percentile = Column(Float, nullable=True)
     budget = Column(Integer, nullable=True)
-
+    
     additional_info = Column(JSON, default={})
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = relationship("User", back_populates="profile")
+
+class ChatRecord(Base):
+    """
+    Unified table for both chat messages and college recommendations.
+    """
+    __tablename__ = "chat_records"
+
+    # Common fields for both messages and recommendations
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    chat_id = Column(String, ForeignKey("chats.id"), index=True, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    # Fields specific to a chat message
+    role = Column(String, nullable=True)  # 'user', 'assistant', or None for recommendations
+    content = Column(Text, nullable=True) # The text of the chat message
+
+    # Field specific to a college recommendation
+    recommendation_data = Column(JSON, nullable=True)
+
+    chat = relationship("Chat", back_populates="records")
+
 
 # -------------------- Init Function --------------------
 def init_db():

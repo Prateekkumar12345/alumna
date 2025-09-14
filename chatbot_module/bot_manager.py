@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
 
-from chatbot_module.schemas import CollegeRecommendation, Title
+from chatbot_module.schemas import ChatRecord, Title
 from chatbot_module.chat_manager import ChatManager
 from chatbot_module.message_manager import MessageManager
 from chatbot_module.counselor import DynamicCollegeCounselorBot
@@ -118,12 +118,15 @@ class BotManager:
             recommendations = self.bot.generate_personalized_recommendations(profile=profile)
 
             for rec in recommendations:
-                new_rec = CollegeRecommendation(
+                new_rec = ChatRecord(
                     chat_id=chat_id,
                     recommendation_data=rec,
-                    created_at=datetime.utcnow()
+                    role=None,
+                    content=None,
+                    timestamp=datetime.utcnow()
                 )
                 self.db.add(new_rec)
+
 
         # ✅ Commit DB changes
         self.db.commit()
@@ -134,7 +137,8 @@ class BotManager:
         }
 
     def get_recommendations(self, chat_id: str):
-        recs = self.db.query(CollegeRecommendation).filter(
-            CollegeRecommendation.chat_id == chat_id
+        recs = self.db.query(ChatRecord).filter(
+            ChatRecord.chat_id == chat_id,
+            ChatRecord.recommendation_data.isnot(None)
         ).all()
         return [r.recommendation_data for r in recs]

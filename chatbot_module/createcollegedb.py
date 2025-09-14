@@ -2,11 +2,13 @@ import pandas as pd
 import json
 import re
 from sqlalchemy import create_engine, text
-
+from dotenv import load_dotenv
+import os
+load_dotenv()
 # ==============================
 # DATABASE CONNECTION DETAILS
 # ==============================
-DATABASE_URI = "postgresql://ml_user:ml_password@3.7.255.54:5432/ml_db"
+DATABASE_URI = os.getenv("DATABASE_URI")
 
 # ==============================
 # STEP 1: READ EXCEL FILE

@@ -19,7 +19,7 @@ from resume_analyzer.job_matcher import JobRoleMatcher
 from resume_analyzer.pdf_extractor import PDFExtractor
 from resume_analyzer.config import ATS_KEYWORDS, INDUSTRY_INSIGHTS
 
-from chatbot_module.schemas import  Title, Message
+from chatbot_module.schemas import  Title, ChatRecord
 
 app = FastAPI(title="Chatbot Module API")
 
@@ -341,14 +341,17 @@ def send_message(
         "recommendations": result["recommendations"]
     }
 
-# -------------------- Get Chat Messages --------------------
+
+
+
 @app.get("/chat/messages")
 def get_chat_messages(
     chat_id: str = Query(..., description="Chat ID"),
     db: Session = Depends(get_db)
 ):
-    messages = db.query(Message).filter(Message.chat_id == chat_id).all()
-    if messages is None:
+    # ✅ Fetch all chat records (both messages & recommendations)
+    records = db.query(ChatRecord).filter(ChatRecord.chat_id == chat_id).all()
+    if not records:
         raise HTTPException(
             status_code=404,
             detail={
@@ -356,6 +359,7 @@ def get_chat_messages(
                 "chat_id": chat_id,
                 "title": "",
                 "messages": [],
+                "recommendations": [],
                 "message": f"Chat with id '{chat_id}' does not exist"
             }
         )
@@ -364,16 +368,26 @@ def get_chat_messages(
     title_obj = db.query(Title).filter(Title.chat_id == chat_id).first()
     chat_title = title_obj.title if title_obj else "Untitled Chat"
 
+    # ✅ Separate messages & recommendations
+    messages = [
+        {"id": r.id, "role": r.role, "content": r.content, "timestamp": r.timestamp}
+        for r in records if r.role is not None
+    ]
+
+    recommendations = [
+        {"id": r.id, "data": r.recommendation_data, "timestamp": r.timestamp}
+        for r in records if r.recommendation_data is not None
+    ]
+
     return {
         "error": False,
         "chat_id": chat_id,
         "title": chat_title,
-        "messages": [
-            {"id": m.id, "role": m.role, "content": m.content, "timestamp": m.timestamp}
-            for m in messages
-        ],
-        "message": "Messages retrieved successfully"
+        "messages": messages,
+        "recommendations": recommendations,
+        "message": "Chat data retrieved successfully"
     }
+
 
 
 # -------------------- Get Chat Recommendations --------------------
