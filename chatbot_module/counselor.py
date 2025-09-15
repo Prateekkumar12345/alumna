@@ -1353,7 +1353,6 @@ Would you like me to help you refine your search criteria or provide information
         
         return summary
 
-    # Keep all existing methods from the original class
     def _extract_fees_from_courses(self, courses_data) -> int:
         """Extract average fees from courses data"""
         if not courses_data:
@@ -1409,7 +1408,72 @@ Would you like me to help you refine your search criteria or provide information
 
         return highlights[:4]
 
-    # Include all other existing methods from original class...
+    def generate_personalized_recommendations(self, profile=None):
+        """Generate recommendations based on student profile using database"""
+        recommendations = []
+        
+        # Use persisted DB profile if provided, otherwise use current profile
+        if not profile:
+            profile = self.student_profile
+
+        preferred_fields = getattr(profile, "preferred_fields", []) or []
+        location_preference = getattr(profile, "location_preference", None)
+
+        # Extract requirements similar to enhanced recommendations
+        requirements = {
+            "course_field": [field.lower() for field in preferred_fields],
+            "specific_courses": [],
+            "location_preferences": [location_preference] if location_preference else [],
+            "budget_range": getattr(profile, "budget", None),
+            "college_type": None,
+            "entrance_exams": [],
+            "specializations": [],
+            "priorities": [],
+            "just_location_based": False
+        }
+
+        # Fetch colleges using the smart query system
+        db_colleges = self._fetch_colleges_with_smart_query(requirements)
+
+        # Convert to the expected format for backwards compatibility
+        for college in db_colleges:
+            score = college.get('relevance_score', 0)
+            reasons = []
+            
+            # Build match reasons based on score components
+            if requirements["course_field"]:
+                if any(field in str(college.get('streams', [])).lower() for field in requirements["course_field"]):
+                    reasons.append(f"Offers programs in {', '.join(preferred_fields)}")
+            
+            if location_preference:
+                if location_preference.lower() in college.get('location', '').lower():
+                    reasons.append("Preferred location")
+            
+            if college.get('scholarship') and college.get('scholarship').lower() != "n/a":
+                reasons.append("Scholarships available")
+                
+            recommendations.append({
+                "name": college['name'],
+                "location": college['location'],
+                "fees": college.get('fees', 0),
+                "match_score": min(score, 100.0),
+                "match_reasons": reasons or ["Good overall fit based on your profile"],
+                "type": college.get('type', 'General'),
+                "admission": college.get('admission', 'Various entrance exams'),
+                "highlights": college.get('highlights', [])[:3],
+                "website": college.get('website'),
+                "contact": college.get('contact'),
+                "email": college.get('email'),
+                "scholarship": college.get('scholarship'),
+                "affiliation": college.get('affiliation')
+            })
+        
+        # Sort by match score and return top recommendations
+        recommendations.sort(key=lambda x: x['match_score'], reverse=True)
+        
+        return recommendations[:10] if recommendations else []
+
+    # Initialize career insights
     def _initialize_career_insights(self):
         """Initialize career insights database"""
         return {
@@ -1429,9 +1493,74 @@ Would you like me to help you refine your search criteria or provide information
                         "salary_range": "₹6-40 lakhs per year",
                         "growth_prospects": "Very High - Every industry needs data insights"
                     }
+                },
+                "healthcare": {
+                    "Doctor": {
+                        "description": "Diagnose and treat medical conditions",
+                        "skills_required": ["Medical knowledge", "Empathy", "Decision-making", "Communication"],
+                        "education_path": ["MBBS + MD/MS specialization"],
+                        "salary_range": "₹6-50+ lakhs per year",
+                        "growth_prospects": "Stable - Always in demand"
+                    }
+                },
+                "business": {
+                    "Management Consultant": {
+                        "description": "Help organizations solve complex business problems",
+                        "skills_required": ["Analytical thinking", "Communication", "Industry knowledge"],
+                        "education_path": ["Any graduation + MBA from top school"],
+                        "salary_range": "₹8-40 lakhs per year",
+                        "growth_prospects": "Excellent - High learning curve, global opportunities"
+                    }
                 }
             }
         }
+
+    def _analyze_conversation_context(self, user_message: str) -> Dict[str, Any]:
+        """Analyze conversation context to determine if recommendations are appropriate"""
+        message_lower = user_message.lower()
+        context_analysis = {
+            "should_recommend": False,
+            "recommendation_type": None,
+            "confidence": 0.0
+        }
+        
+        # Direct requests for recommendations
+        direct_triggers = ["recommend", "suggest", "college", "university", "institute"]
+        if any(trigger in message_lower for trigger in direct_triggers):
+            context_analysis["should_recommend"] = True
+            context_analysis["confidence"] = 0.9
+            context_analysis["recommendation_type"] = "direct_request"
+            return context_analysis
+        
+        # Contextual triggers based on conversation stage
+        if self.conversation_stage in ["recommendation", "detailed_guidance"]:
+            # Questions about options/choices
+            option_questions = ["what should i", "which one", "options", "choices", "what are"]
+            if any(question in message_lower for question in option_questions):
+                context_analysis["should_recommend"] = True
+                context_analysis["confidence"] = 0.8
+                context_analysis["recommendation_type"] = "option_inquiry"
+                return context_analysis
+        
+        # Academic/career discussions with sufficient profile info
+        academic_keywords = ["study", "course", "degree", "program", "career", "future"]
+        if any(keyword in message_lower for keyword in academic_keywords):
+            if self.sufficient_info_collected:
+                context_analysis["should_recommend"] = True
+                context_analysis["confidence"] = 0.7
+                context_analysis["recommendation_type"] = "academic_discussion"
+                return context_analysis
+        
+        # User expressing confusion or need for guidance
+        confusion_phrases = ["confused", "don't know", "unsure", "help me", "need guidance"]
+        if any(phrase in message_lower for phrase in confusion_phrases):
+            if self.message_count > 3:  # After some conversation
+                context_analysis["should_recommend"] = True
+                context_analysis["confidence"] = 0.6
+                context_analysis["recommendation_type"] = "guidance_needed"
+                return context_analysis
+        
+        return context_analysis
 
     def chat(self, message, context):
         """Enhanced chat function with improved recommendation system"""
@@ -1531,21 +1660,21 @@ Would you like me to help you refine your search criteria or provide information
         
         # Handle specific queries with enhanced responses
         if any(word in message_lower for word in ["engineering", "iit", "jee", "computer science"]):
-            return """Great choice! Engineering offers excellent career prospects. Let me help you with some recommendations:
+            return """Engineering offers excellent career prospects. Let me help you with some recommendations:
 
-🏆 **Premier Institutes (IITs)**
+**Premier Institutes (IITs)**
 - IIT Delhi, Mumbai, Bangalore, Kharagpur, Kanpur
 - Admission: JEE Advanced (need JEE Main qualification first)
 - Fees: ₹2-3 lakhs per year
 - Placement: ₹10-50+ lakhs average packages
 
-🎯 **National Institutes of Technology (NITs)**
+**National Institutes of Technology (NITs)**
 - NIT Trichy, Warangal, Surathkal, Calicut, Allahabad
 - Admission: JEE Main
 - Fees: ₹1.5-2 lakhs per year
 - Great balance of quality and affordability
 
-⭐ **Top Private Engineering Colleges**
+**Top Private Engineering Colleges**
 - BITS Pilani, VIT Vellore, Manipal Institute, SRM
 - Own entrance exams (BITSAT, VITEEE, etc.)
 - Fees: ₹3-4 lakhs per year
@@ -1556,19 +1685,19 @@ Would you like specific information about any particular branch of engineering o
         elif any(word in message_lower for word in ["medical", "doctor", "neet", "mbbs"]):
             return """Medicine is a noble career path! Here's comprehensive guidance:
 
-🏥 **AIIMS (All India Institute of Medical Sciences)**
+**AIIMS (All India Institute of Medical Sciences)**
 - AIIMS Delhi, Jodhpur, Bhubaneswar, Rishikesh, and others
 - Admission: NEET UG (extremely competitive)
 - Fees: ₹5,564 per year (highly subsidized)
 - Best medical education in India
 
-🎓 **Government Medical Colleges**
+**Government Medical Colleges**
 - State quotas available (85% seats reserved for state students)
 - Examples: MAMC Delhi, GMC Chandigarh, KMC Mangalore
 - Fees: ₹10K-2 lakhs per year
 - Excellent clinical exposure
 
-🏫 **Deemed Medical Universities**
+**Deemed Medical Universities**
 - CMC Vellore, Kasturba Medical College, St. John's
 - All India quota seats available
 - Fees: ₹10-25 lakhs total course
@@ -1587,19 +1716,19 @@ What's your current academic level? Are you preparing for NEET?"""
         elif any(word in message_lower for word in ["mba", "management", "business", "cat"]):
             return """Business education opens diverse career opportunities!
 
-🎯 **Indian Institutes of Management (IIMs)**
+**Indian Institutes of Management (IIMs)**
 - IIM A, B, C (top tier), IIM L, I, K (excellent newer ones)
 - Admission: CAT + Personal Interview
 - Fees: ₹20-25 lakhs total
 - Placements: ₹25-35 lakhs average, consulting/finance roles
 
-⭐ **Other Premier B-Schools**
+**Other Premier B-Schools**
 - ISB Hyderabad/Mohali (1-year MBA)
 - XLRI Jamshedpur, FMS Delhi, IIFT Delhi
 - Various entrance exams (XAT, IIFT, etc.)
 - Strong industry reputation
 
-📈 **Specialization Options**
+**Specialization Options**
 - General Management, Finance, Marketing
 - Operations, HR, Healthcare Management
 - Family Business, Rural Management
@@ -1618,21 +1747,21 @@ Most top MBAs prefer 2-3 years work experience. Are you currently working or pla
 
 To provide the best recommendations, I'd like to understand:
 
-🎯 **Your Academic Background:**
+**Your Academic Background:**
 - Which class/year are you in?
 - What subjects do you enjoy most?
 - Your approximate academic performance?
 
-💡 **Career Interests:**
+**Career Interests:**
 - Any specific fields that excite you? (Tech, Healthcare, Business, Arts)
 - Are you drawn to problem-solving, creativity, helping people, or business?
 
-📍 **Practical Considerations:**
+**Practical Considerations:**
 - Preferred locations for study?
 - Any budget constraints?
 - Family expectations or suggestions?
 
-🎓 **Study Preferences:**
+**Study Preferences:**
 - Large universities vs smaller colleges?
 - Research-focused vs industry-oriented programs?
 
@@ -1645,7 +1774,7 @@ What would you like to share first? Even partial information helps me guide you 
 
 Based on our conversation, here are some areas we can explore further:
 
-📚 **Academic Paths We Can Discuss:**
+**Academic Paths We Can Discuss:**
 - Engineering & Technology (various specializations)
 - Medical & Healthcare Sciences
 - Business & Management Studies
@@ -1653,17 +1782,17 @@ Based on our conversation, here are some areas we can explore further:
 - Arts, Design & Creative Fields
 - Law & Social Sciences
 
-🌍 **Geographic Options:**
+**Geographic Options:**
 - Top colleges across different Indian states
 - Metro vs non-metro college experiences
 - International study opportunities
 
-💼 **Career Trajectory Planning:**
+**Career Trajectory Planning:**
 - Industry trends and job market insights
 - Skills development alongside academics
 - Internship and placement guidance
 
-🎯 **Practical Guidance:**
+**Practical Guidance:**
 - Entrance exam strategies
 - Application processes and deadlines
 - Scholarship and financial aid options
