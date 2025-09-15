@@ -747,7 +747,7 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 from chatbot_module.config import DATABASE_URI
 
-class EnhancedDynamicCollegeCounselorBot:
+class DynamicCollegeCounselorBot:
     """Enhanced counselor class with intelligent recommendation system"""
 
     def __init__(self, api_key=None, name="Lauren"):
