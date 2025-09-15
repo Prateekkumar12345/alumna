@@ -20,7 +20,7 @@ class BotManager:
 
     def __init__(self, db: Session):
         self.db = db
-        self.bot = DynamicCollegeCounselorBot(api_key=OPENAI_API_KEY)  # AI model
+        self.bot = EnhancedDynamicCollegeCounselorBot(api_key=OPENAI_API_KEY)  # AI model
         self.message_manager = MessageManager(db)
         self.recommendation_manager = RecommendationManager(db)
         self.profile_manager = ProfileManager(db)
