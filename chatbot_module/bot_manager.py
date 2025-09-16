@@ -31,13 +31,30 @@ class BotManager:
         if existing_title:
             return existing_title.title  # ✅ Already exists
 
-        # 🔥 Use OpenAI to generate title
-        response = client.responses.create(
-            model="gpt-5",
-            input=f"Generate a very short title (max 5 words) summarizing this conversation topic:\n\n{first_message}"
-        )
-        title_text = response.output_text.strip()
-        logging.info(f"Title : {title_text}")
+        try:
+            # 🔥 Use correct OpenAI API call
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",  # Use a valid model name
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "Generate a very short title (max 5 words) summarizing the conversation topic. Return only the title, no extra text."
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"Generate a short title for this message: {first_message}"
+                    }
+                ],
+                max_tokens=20,
+                temperature=0.7
+            )
+            title_text = response.choices[0].message.content.strip()
+            logging.info(f"Generated title: {title_text}")
+            
+        except Exception as e:
+            logging.error(f"Error generating title with OpenAI: {e}")
+            # Fallback to simple title generation
+            title_text = self._generate_fallback_title(first_message)
 
         # ✅ Save into DB
         new_title = Title(chat_id=chat_id, title=title_text, created_at=datetime.utcnow())
@@ -46,6 +63,25 @@ class BotManager:
         self.db.refresh(new_title)
 
         return new_title.title
+
+    def _generate_fallback_title(self, message: str) -> str:
+        """Generate a fallback title when OpenAI API fails"""
+        message_lower = message.lower()
+        
+        if any(word in message_lower for word in ["recommend", "suggest", "college", "university"]):
+            return "College Recommendations"
+        elif any(word in message_lower for word in ["engineering", "btech", "b.tech"]):
+            return "Engineering Guidance"
+        elif any(word in message_lower for word in ["medical", "mbbs", "doctor"]):
+            return "Medical Career Help"
+        elif any(word in message_lower for word in ["mba", "business", "management"]):
+            return "Business Education"
+        elif any(word in message_lower for word in ["career", "job", "future"]):
+            return "Career Planning"
+        elif any(word in message_lower for word in ["help", "guidance", "advice"]):
+            return "Educational Guidance"
+        else:
+            return "Chat Session"
 
     def _should_generate_recommendations(self, message_text: str, conversation_context: dict) -> bool:
         """Determine if recommendations should be generated based on context"""
@@ -68,12 +104,9 @@ class BotManager:
                 return True
         
         # Check if user is discussing academic/career choices
-        academic_keywords = ["study", "course", "degree", "program", "career", "future", "education"]
+        academic_keywords = ["study", "course", "degree", "program", "career", "future", "education", "btech", "engineering"]
         if any(keyword in message_lower for keyword in academic_keywords):
-            # If we have enough profile info, provide recommendations
-            profile = self.profile_manager.get_profile(conversation_context.get("user_id", ""))
-            if profile and (getattr(profile, "preferred_fields", []) or getattr(profile, "scores", {})):
-                return True
+            return True  # Always generate recommendations for academic discussions
         
         return False
 
@@ -106,40 +139,42 @@ class BotManager:
             "message_count": self.bot.message_count
         }
 
+        # Always try to generate recommendations for educational queries
         if self._should_generate_recommendations(message_text, conversation_context):
+            logging.info("Generating recommendations based on message context")
             profile = self.profile_manager.get_profile(user_id)
             recommendations = self.bot.generate_personalized_recommendations(profile=profile)
+            logging.info(f"Generated {len(recommendations) if recommendations else 0} recommendations")
 
-            for rec in (recommendations or []):
-                new_rec = ChatRecord(
-                    chat_id=chat_id,
-                    recommendation_data=rec,
-                    role=None,
-                    content=None,
-                    timestamp=datetime.utcnow()
-                )
-                self.db.add(new_rec)
+            # Store recommendations in database
+            if recommendations:
+                for rec in recommendations:
+                    new_rec = ChatRecord(
+                        chat_id=chat_id,
+                        recommendation_data=rec,
+                        role=None,
+                        content=None,
+                        timestamp=datetime.utcnow()
+                    )
+                    self.db.add(new_rec)
 
-        # ✅ If no recommendations → inject profile into bot prompt
-        if not recommendations:
-            profile = self.profile_manager.get_profile(user_id)
-            if profile:
-                profile_context = (
-                    f"\n\n[Student Profile]\n"
-                    f"- Preferred fields: {getattr(profile, 'preferred_fields', [])}\n"
-                    f"- Scores: {getattr(profile, 'scores', {})}\n"
-                    f"- Goals: {getattr(profile, 'goals', '')}\n"
-                    f"- Location preference: {getattr(profile, 'location_preference', '')}\n"
-                )
-                # Append profile context to user message
-                bot_input = message_text + profile_context
-            else:
-                bot_input = message_text
+        # ✅ Prepare bot input with profile context
+        profile = self.profile_manager.get_profile(user_id)
+        if profile:
+            profile_context = (
+                f"\n\n[Student Profile Context]\n"
+                f"- Preferred fields: {getattr(profile, 'preferred_fields', [])}\n"
+                f"- Academic scores: {getattr(profile, 'scores', {})}\n"
+                f"- Career goals: {getattr(profile, 'career_goals', [])}\n"
+                f"- Location preference: {getattr(profile, 'location_preference', 'Not specified')}\n"
+                f"- Budget: {getattr(profile, 'budget', 'Not specified')}\n"
+            )
+            bot_input = message_text + profile_context
         else:
             bot_input = message_text
 
-        # ✅ Generate bot response (with profile if needed)
-        response_text = self.bot.chat(bot_input, context={})
+        # ✅ Generate bot response
+        response_text = self.bot.chat(bot_input, context=conversation_context)
         self.message_manager.store_message(chat_id, "assistant", response_text)
 
         # ✅ Commit DB changes
@@ -147,10 +182,11 @@ class BotManager:
 
         return {
             "response": response_text,
-            "recommendations": recommendations
+            "recommendations": recommendations or []  # Ensure it's never None
         }
 
     def get_recommendations(self, chat_id: str):
+        """Get all recommendations for a specific chat"""
         recs = self.db.query(ChatRecord).filter(
             ChatRecord.chat_id == chat_id,
             ChatRecord.recommendation_data.isnot(None)
