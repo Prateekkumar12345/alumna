@@ -340,7 +340,7 @@ class DynamicCollegeCounselorBot:
         academic_keywords = ["study", "course", "degree", "program", "career", "future"]
         if any(keyword in message_lower for keyword in academic_keywords):
             if self.sufficient_info_collected:
-                context_analysis["should_recommend"] = True
+                context_analysis["should_recommend": True]
                 context_analysis["confidence"] = 0.7
                 context_analysis["recommendation_type"] = "academic_discussion"
                 return context_analysis
@@ -673,6 +673,9 @@ What specific aspect would you like to dive deeper into? I'm here to provide det
 
     def generate_personalized_recommendations(self, profile=None):
         """Generate recommendations based on student profile using database - Fixed version"""
+        print(f"DEBUG: Starting recommendation generation")
+        print(f"DEBUG: Profile: {profile.__dict__ if profile else 'No profile'}")
+        
         recommendations = []
         
         # Use persisted DB profile if provided
@@ -682,7 +685,8 @@ What specific aspect would you like to dive deeper into? I'm here to provide det
         preferred_fields = getattr(profile, "preferred_fields", []) or []
         location_preference = getattr(profile, "location_preference", None)
         
-        logging.info(f"Generating recommendations with fields: {preferred_fields}, location: {location_preference}")
+        print(f"DEBUG: Preferred fields: {preferred_fields}")
+        print(f"DEBUG: Location preference: {location_preference}")
 
         try:
             # Fetch colleges from database based on preferences
@@ -692,15 +696,15 @@ What specific aspect would you like to dive deeper into? I'm here to provide det
                     field_keywords=preferred_fields,
                     location=location_preference
                 )
-                logging.info(f"Found {len(all_colleges)} colleges from search")
+                print(f"DEBUG: Found {len(all_colleges)} colleges from search")
             else:
                 # Get all colleges if no specific field preference
                 all_colleges = self._fetch_colleges_from_database()
-                logging.info(f"Found {len(all_colleges)} colleges from database")
+                print(f"DEBUG: Found {len(all_colleges)} colleges from database")
 
             if not all_colleges:
-                logging.warning("No colleges found in database")
-                return []
+                print("DEBUG: No colleges found in database")
+                return self._create_default_recommendations(preferred_fields, location_preference)
 
             # Filter and score colleges based on student preferences
             for college in all_colleges:
@@ -803,17 +807,17 @@ What specific aspect would you like to dive deeper into? I'm here to provide det
             recommendations.sort(key=lambda x: x['match_score'], reverse=True)
             
             final_recommendations = recommendations[:15] if recommendations else []
-            logging.info(f"Final recommendations count: {len(final_recommendations)}")
+            print(f"DEBUG: Final recommendations count: {len(final_recommendations)}")
             
             # If still no recommendations, create some default ones
             if not final_recommendations:
-                logging.warning("No recommendations generated, creating default recommendations")
+                print("DEBUG: No recommendations generated, creating default recommendations")
                 final_recommendations = self._create_default_recommendations(preferred_fields, location_preference)
             
             return final_recommendations
             
         except Exception as e:
-            logging.error(f"Error in generate_personalized_recommendations: {e}")
+            print(f"DEBUG: Error in generate_personalized_recommendations: {e}")
             return self._create_default_recommendations(preferred_fields, location_preference)
 
     def _create_default_recommendations(self, preferred_fields, location_preference):

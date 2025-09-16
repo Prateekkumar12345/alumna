@@ -1,6 +1,9 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
+import json
+import re
+import uuid
 
 from chatbot_module.schemas import ChatRecord, Title
 from chatbot_module.chat_manager import ChatManager
@@ -13,7 +16,6 @@ from openai import OpenAI
 
 # -------------------- OpenAI Client --------------------
 client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 class BotManager:
     """Manages chatbot interactions and database logging"""
@@ -34,7 +36,7 @@ class BotManager:
         try:
             # 🔥 Use correct OpenAI API call
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Use a valid model name
+                model="gpt-3.5-turbo",
                 messages=[
                     {
                         "role": "system", 
@@ -87,6 +89,10 @@ class BotManager:
         """Determine if recommendations should be generated based on context"""
         message_lower = message_text.lower()
         
+        # Always generate for B.Tech related queries
+        if any(word in message_lower for word in ["btech", "b.tech", "engineering", "college", "recommend"]):
+            return True
+            
         # Explicit recommendation requests
         if any(keyword in message_lower for keyword in ["recommend", "suggest", "college", "university", "institute"]):
             return True
@@ -104,7 +110,7 @@ class BotManager:
                 return True
         
         # Check if user is discussing academic/career choices
-        academic_keywords = ["study", "course", "degree", "program", "career", "future", "education", "btech", "engineering"]
+        academic_keywords = ["study", "course", "degree", "program", "career", "future", "education"]
         if any(keyword in message_lower for keyword in academic_keywords):
             return True  # Always generate recommendations for academic discussions
         
@@ -152,8 +158,8 @@ class BotManager:
                     new_rec = ChatRecord(
                         chat_id=chat_id,
                         recommendation_data=rec,
-                        role=None,
-                        content=None,
+                        role="system",  # Add role to avoid null constraint
+                        content=f"College recommendation: {rec.get('name', 'Unknown College')}",
                         timestamp=datetime.utcnow()
                     )
                     self.db.add(new_rec)
